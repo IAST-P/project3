@@ -67,7 +67,7 @@ df = df[df['content'].str.contains('Х/ф|М/ф|М/с', na=False)]
 
 df['extracted_title'] = df['content'].str.extract(r'"([^"]+)"')
 lll = ['assetId','status', 'name', 'name_en', 'name_ua', 'name_ru', 'promotionTitle_ru', 'promotionTitle_en', 'promotionTitle_ua']
-df_movie = pd.read_csv(r"D:\jupyter\Blizzard_MOVIES_Total.csv", usecols=lll)
+df_movie = pd.read_csv(r"D:\####\#####.csv", usecols=lll)
 df_movie = df_movie[df_movie['status'] == 'ACTIVE']
 df_movie = df_movie[~df_movie['name'].str.contains(r'Х/ф|М/ф|М/c', na=False)]
 df_movie = pd.melt(
