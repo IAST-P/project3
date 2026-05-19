@@ -1,1 +1,99 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from rapidfuzz import process, fuzz
+from sqlalchemy import create_engine, MetaData, Table
+import time
+import random
 
+def fetch_with_retries(url, max_retries=5, base_delay=2):
+    for attempt in range(max_retries):
+        try:
+            headers = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " 
+                       "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                return response
+            else:
+                print(f"Attempt {attempt+1} failed with status code: {response.status_code}")
+        except requests.RequestException as e:
+            print(f"Attempt {attempt+1} raised an exception: {e}")
+        # Exponential backoff with jitter
+        sleep_time = base_delay * (2 ** attempt) + random.uniform(0, 1)
+        print(f"Retrying in {sleep_time:.2f} seconds...")
+        time.sleep(sleep_time)
+    print(f"Failed to fetch after {max_retries} attempts: {url}")
+    return None
+chanels = {
+    1817: "Viasat kino", 1818: "Viasat kino world", 1816: "Viasat action", 1819: "Viasat Comedy", 1822: "Viasat megahit",
+    972: "Cine +", 976: "Cine + hit", 980: "Cine + legend", 1111: "Cine + kids", 1391: "Hollywood HD", 1865: "Kino living",
+    1730: "ICTV 2", 360: "Новий", 364: "ТЕТ", 371: "2+2", 1805: "1+1", 1900: "Kinowood", 1933: "Kinosweet", 749: "Xsport",
+    494: "Суспільне Культура", 376: "Плюс плюс", 373: "Піксель", 1945: "Nickelodeon", 1596: "Nicki Kids", 1595: "Nicki Junior",
+    2107: "Твоє Кіно RELAX", 2103: "Твоє Кіно ACTION", 2105: "Твоє Кіно ХІТ", 214: "AMC"
+}
+df = pd.DataFrame()  # Initialize an empty DataFrame
+for key, value in chanels.items():
+    url = f"http://www.vsetv.com/schedule_channel_{key}_week.html"  # Replace with the target URL
+    time.sleep(random.uniform(1, 3))
+    response = fetch_with_retries(url)
+    if response.status_code == 200:
+        # Step 2: Parse the HTML content
+        soup = BeautifulSoup(response.content, "html.parser")
+        anchors = soup.find_all("a", attrs={"name": True})  # Find all anchors with a "name" attribute
+        for anchor in anchors:
+            elements_after_anchor = anchor.find_next_siblings()  # Get all siblings after the anchor
+            # Extract the date from the block
+            date_element = anchor.find_next("td", class_="weekdaytitle")
+            if date_element:
+                date = date_element.text.strip()
+            else:
+                continue  # Skip if no date is found
+            # Extract all contents (titles) from the block
+            contents = []
+            for sibling in elements_after_anchor:
+                prname_elements = sibling.find_all("div", class_="prname2")
+                for prname in prname_elements:
+                    text = prname.get_text(strip=True)
+                    contents.append(text)
+            
+            # Append data to the DataFrame
+            if contents:  # Only add rows if contents are found
+                data = {"channel" : [value] * len(contents),"date": [date] * len(contents), "content": contents}
+                df = pd.concat([df, pd.DataFrame(data)], ignore_index=True)    
+    else:
+        print(f"Failed to fetch the website. Status code: {response.status_code}")
+        print(url)
+df = df[df['content'].str.contains('Х/ф|М/ф|М/с', na=False)]
+
+df['extracted_title'] = df['content'].str.extract(r'"([^"]+)"')
+lll = ['assetId','status', 'name', 'name_en', 'name_ua', 'name_ru', 'promotionTitle_ru', 'promotionTitle_en', 'promotionTitle_ua']
+df_movie = pd.read_csv(r"D:\jupyter\Blizzard_MOVIES_Total.csv", usecols=lll)
+df_movie = df_movie[df_movie['status'] == 'ACTIVE']
+df_movie = df_movie[~df_movie['name'].str.contains(r'Х/ф|М/ф|М/c', na=False)]
+df_movie = pd.melt(
+    df_movie,
+    id_vars=['assetId'],
+    value_vars=lll[2::],
+    var_name='name_type',  # Temporary column for original column names
+    value_name='name_value'  # Avoid conflict with existing 'name'
+)
+df_movie = df_movie[['assetId', 'name_value']]
+df_movie = df_movie.dropna(subset=['name_value'])
+
+
+def find_best_match(title, choices, threshold=80):
+    match, score, _ = process.extractOne(title, choices, scorer=fuzz.ratio)
+    return match if score >= threshold else None
+df['matched_name'] = df['extracted_title'].apply(
+    lambda title: find_best_match(title, df_movie['name_value'])
+)
+df['THEsame'] = df['extracted_title'] == df['matched_name']
+df = df.drop_duplicates(subset=['channel', 'content'], keep='last')
+
+user = '####'
+password = '####'
+host = '###.###.###.##'
+database = '#####'
+table_name = 'your_table_name'
+engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}/{database}')
+df.to_sql(table_name, con=engine, index=False, if_exists='replace')
